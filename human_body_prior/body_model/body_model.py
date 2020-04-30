@@ -36,7 +36,7 @@ class BodyModel(nn.Module):
                  bm_path,
                  params=None,
                  num_betas=10,
-                 batch_size=1, v_template = None,
+                 batch_size=1, v_template=None,
                  num_dmpls=None, path_dmpl=None,
                  num_expressions=10,
                  use_posedirs=True,
@@ -60,10 +60,17 @@ class BodyModel(nn.Module):
         if params is None: params = {}
 
         # -- Load SMPL params --
-        if '.npz' in bm_path:
-            smpl_dict = np.load(bm_path, encoding='latin1')
+        if '.npz' in bm_path or '.pkl' in bm_path:
+            smpl_dict = np.load(bm_path, allow_pickle=True, encoding='latin1')
         else:
             raise ValueError('bm_path should be either a .pkl nor .npz file')
+
+        # convert to numpy.ndarray
+        for key in smpl_dict.keys():
+            t = str(type(smpl_dict[key]))
+            if 'chumpy.ch' in t or 'scipy.sparse' in t:
+                if 'scipy.sparse' in t: smpl_dict[key] = smpl_dict[key].todense()
+                smpl_dict[key] = np.array(smpl_dict[key], dtype=np.float32)
 
         njoints = smpl_dict['posedirs'].shape[2] // 3
         self.model_type = {69: 'smpl', 153: 'smplh', 162: 'smplx', 45: 'mano'}[njoints]
@@ -121,7 +128,7 @@ class BodyModel(nn.Module):
         # Regressor for joint locations given shape - 6890 x 24
         self.register_buffer('J_regressor', torch.tensor(smpl_dict['J_regressor'], dtype=dtype))
 
-        # Pose blend shape basis: 6890 x 3 x 207, reshaped to 6890*30 x 207
+        # Pose blend shape basis: 6890 x 3 x 207, reshaped to 6890*3 x 207
         if use_posedirs:
             posedirs = smpl_dict['posedirs']
             posedirs = posedirs.reshape([posedirs.shape[0] * 3, -1]).T
@@ -204,10 +211,10 @@ class BodyModel(nn.Module):
         :return:
         '''
         assert not (v_template  is not None and betas  is not None), ValueError('vtemplate and betas could not be used jointly.')
-        assert self.model_type in ['smpl', 'smplh', 'smplx', 'mano', 'mano'], ValueError(
+        assert self.model_type in ['smpl', 'smplh', 'smplx', 'mano'], ValueError(
             'model_type should be in smpl/smplh/smplx/mano')
         if root_orient is None:  root_orient = self.root_orient
-        if self.model_type in ['smplh', 'smpl']:
+        if self.model_type in ['smpl', 'smplh']:
             if pose_body is None:  pose_body = self.pose_body
             if pose_hand is None:  pose_hand = self.pose_hand
         elif self.model_type == 'smplx':
@@ -215,21 +222,19 @@ class BodyModel(nn.Module):
             if pose_hand is None:  pose_hand = self.pose_hand
             if pose_jaw is None:  pose_jaw = self.pose_jaw
             if pose_eye is None:  pose_eye = self.pose_eye
-        elif self.model_type in ['mano', 'mano']:
+        elif self.model_type in ['mano']:
             if pose_hand is None:  pose_hand = self.pose_hand
         
-        if pose_hand is None:  pose_hand = self.pose_hand
-
         if trans is None: trans = self.trans
         if v_template is None: v_template = self.v_template
         if betas is None: betas = self.betas
 
-        if self.model_type in ['smplh', 'smpl']:
+        if self.model_type in ['smpl', 'smplh']:
             full_pose = torch.cat([root_orient, pose_body, pose_hand], dim=1)
         elif self.model_type == 'smplx':
             full_pose = torch.cat([root_orient, pose_body, pose_jaw, pose_eye, pose_hand],
                                   dim=1)  # orient:3, body:63, jaw:3, eyel:3, eyer:3, handl, handr
-        elif self.model_type in ['mano', 'mano']:
+        elif self.model_type in ['mano']:
             full_pose = torch.cat([root_orient, pose_hand], dim=1)
 
         if self.use_dmpl:
@@ -269,7 +274,7 @@ class BodyModel(nn.Module):
             res['pose_hand'] = pose_hand
             res['pose_jaw'] = pose_jaw
             res['pose_eye'] = pose_eye
-        elif self.model_type in ['mano', 'mano']:
+        elif self.model_type in ['mano']:
             res['pose_hand'] = pose_hand
         res['full_pose'] = full_pose
 
